@@ -1,5 +1,5 @@
 # Runs every 10 minutes and POSTs to your app's /internal/refresh with a bearer token
-# Requires two repository secrets: DEPLOY_URL and REFRESH_TOKEN
+# Requires repository secrets: DEPLOY_URL and REFRESH_TOKEN
 on:
   schedule:
     - cron: '*/10 * * * *'   # every 10 minutes

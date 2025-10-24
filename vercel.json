@@ -4,5 +4,11 @@
   ],
   "routes": [
     { "src": "/(.*)", "dest": "/api/index.py" }
+  ],
+  "crons": [
+    {
+      "path": "/internal/refresh",
+      "schedule": "*/10 * * * *"
+    }
   ]
 }

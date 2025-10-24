@@ -1,3 +1,4 @@
+import os
 import requests
 import csv
 import threading
@@ -8,11 +9,15 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)  # Allow requests from anywhere (for dev; restrict in prod if desired)
 
-# Primary CSV (phone based)
-CSV_URL_PHONE = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR1l2CD7aX4_5qHwkQRRHD3ntTyOTOSfB-1jAsBP9J_TdSkyQGdc8qCjO1-GOgXysUdvkG6HQ4LuCov/pub?gid=0&single=true&output=csv"
-
-# Secondary CSV (name based) - the URL you provided
-CSV_URL_NAME = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR1l2CD7aX4_5qHwkQRRHD3ntTyOTOSfB-1jAsBP9J_TdSkyQGdc8qCjO1-GOgXysUdvkG6HQ4LuCov/pub?gid=752823035&single=true&output=csv"
+# CSV URLs are configurable via environment variables (fallbacks use your provided links)
+CSV_URL_PHONE = os.getenv(
+    "CSV_URL_PHONE",
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vR1l2CD7aX4_5qHwkQRRHD3ntTyOTOSfB-1jAsBP9J_TdSkyQGdc8qCjO1-GOgXysUdvkG6HQ4LuCov/pub?gid=0&single=true&output=csv"
+)
+CSV_URL_NAME = os.getenv(
+    "CSV_URL_NAME",
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vR1l2CD7aX4_5qHwkQRRHD3ntTyOTOSfB-1jAsBP9J_TdSkyQGdc8qCjO1-GOgXysUdvkG6HQ4LuCov/pub?gid=752823035&single=true&output=csv"
+)
 
 # In-memory indexes for phone CSV
 fraud_list_phone = []
@@ -63,7 +68,7 @@ def fetch_and_parse_csv(url, mode="phone"):
     mode = "name" expects a name-like column (ReceiverFullName or Name) and builds name-based indexes
     Returns: (list_rows, grouped_entries, id_map)
     """
-    response = requests.get(url)
+    response = requests.get(url, timeout=30)
     response.raise_for_status()
     lines = response.content.decode('utf-8').splitlines()
     reader = csv.DictReader(lines)
@@ -176,16 +181,24 @@ def sync_csv_background():
             print("CSVs refreshed.")
         except Exception as e:
             print(f"CSV fetch error: {e}")
+        # sleep 600 seconds = 10 minutes
         time.sleep(600)
 
 
-# start background sync thread
-sync_thread = threading.Thread(target=sync_csv_background, daemon=True)
-sync_thread.start()
+# Start background sync thread unless disabled by env var.
+# On serverless platforms (Vercel) set DISABLE_BACKGROUND_SYNC=1 to avoid starting a persistent thread.
+if os.getenv("DISABLE_BACKGROUND_SYNC") != "1":
+    sync_thread = threading.Thread(target=sync_csv_background, daemon=True)
+    sync_thread.start()
+else:
+    # For serverless cold starts, fetch once so the function has data for the first requests.
+    try:
+        fetch_and_parse_all()
+    except Exception as e:
+        print(f"Initial CSV fetch failed: {e}")
 
 
-TEMPLATE = """
-<!DOCTYPE html>
+TEMPLATE = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -536,6 +549,36 @@ def api_search():
     return jsonify(result)
 
 
+# Secure internal refresh endpoint for cron jobs and manual triggering
+@app.route("/internal/refresh", methods=["POST"])
+def internal_refresh():
+    """
+    Trigger an immediate CSV refresh. Vercel cron will call this path.
+    Authorization: Bearer <CRON_SECRET> is required.
+    """
+    secret = os.getenv("CRON_SECRET")
+    if not secret:
+        return jsonify({"ok": False, "error": "CRON_SECRET not configured on server"}), 500
+
+    # Check Authorization header for Bearer token
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        token = auth[len("Bearer "):].strip()
+        if token != secret:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+    else:
+        # fallback to form parameter (handy for manual testing)
+        form_token = request.form.get("token", "")
+        if form_token != secret:
+            return jsonify({"ok": False, "error": "unauthorized"}), 401
+
+    try:
+        fetch_and_parse_all()
+        return jsonify({"ok": True, "message": "refreshed"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.after_request
 def add_header(response):
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -545,6 +588,11 @@ def add_header(response):
 
 
 if __name__ == "__main__":
-    # initial load
-    fetch_and_parse_all()
-    app.run(debug=True)
+    # local dev: perform initial load and run dev server
+    try:
+        fetch_and_parse_all()
+    except Exception as e:
+        print(f"Initial CSV fetch (main) failed: {e}")
+
+    port = int(os.getenv("PORT", 3000))
+    app.run(host="0.0.0.0", port=port, debug=True)

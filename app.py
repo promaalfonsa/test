@@ -23,11 +23,13 @@ CSV_URL_NAME = os.getenv(
 fraud_list_phone = []
 phone_entries = {}    # normalized_phone -> [list of entries]
 customer_id_to_phone = {}  # customer_id -> normalized_phone
+zone_entries_phone = {}  # normalized_zone -> [list of entries]
 
 # In-memory indexes for name CSV
 fraud_list_name = []
 name_entries = {}      # normalized_name -> [list of entries]
 customer_id_to_name = {}  # customer_id -> normalized_name
+zone_entries_name = {}  # normalized_zone -> [list of entries]
 
 data_lock = threading.Lock()
 
@@ -53,6 +55,15 @@ def normalize_name(name):
     return " ".join(str(name).strip().split()).lower()
 
 
+def normalize_zone(zone):
+    """
+    Normalize zones for matching: lowercase, strip and collapse whitespace.
+    """
+    if zone is None:
+        return ""
+    return " ".join(str(zone).strip().split()).lower()
+
+
 def parse_customer_ids(cell):
     # Remove brackets, replace commas/newlines with spaces, and split
     if cell is None:
@@ -66,7 +77,7 @@ def fetch_and_parse_csv(url, mode="phone"):
     Fetch CSV and parse.
     mode = "phone" expects a 'Phone' column and builds phone-based indexes
     mode = "name" expects a name-like column (ReceiverFullName or Name) and builds name-based indexes
-    Returns: (list_rows, grouped_entries, id_map)
+    Returns: (list_rows, grouped_entries, id_map, zone_map)
     """
     response = requests.get(url, timeout=30)
     response.raise_for_status()
@@ -75,6 +86,7 @@ def fetch_and_parse_csv(url, mode="phone"):
     temp_list = []
     temp_group = {}
     temp_id_map = {}
+    temp_zone_map = {}
 
     # For name CSV try to detect the name header
     name_header = None
@@ -95,18 +107,22 @@ def fetch_and_parse_csv(url, mode="phone"):
         if mode == "phone":
             phone_raw = row.get('Phone', '').strip()
             phone_key = normalize_phone(phone_raw)
+            zone_raw = row.get('Zone', '').strip()
+            zone_key = normalize_zone(zone_raw)
             ids = parse_customer_ids(row.get('customer_ids', ''))
             entry = {
                 "phone_raw": phone_raw,
                 "phone_key": phone_key,
                 "state": row.get('State', '').strip(),
                 "city": row.get('City', '').strip(),
-                "zone": row.get('Zone', '').strip(),
+                "zone": zone_raw,
                 "distinct_customers": row.get('distinct_customers', '').strip(),
                 "customer_ids": ids
             }
             temp_list.append(entry)
             temp_group.setdefault(phone_key, []).append(entry)
+            if zone_key:
+                temp_zone_map.setdefault(zone_key, []).append(entry)
             for cid in ids:
                 temp_id_map[cid] = phone_key
 
@@ -119,40 +135,44 @@ def fetch_and_parse_csv(url, mode="phone"):
                 name_val = str(name_val).strip()
 
             name_key = normalize_name(name_val)
+            zone_raw = row.get('Zone', '').strip()
+            zone_key = normalize_zone(zone_raw)
             ids = parse_customer_ids(row.get('customer_ids', ''))
             entry = {
                 "name_raw": name_val,
                 "name_key": name_key,
                 "state": row.get('State', '').strip(),
                 "city": row.get('City', '').strip(),
-                "zone": row.get('Zone', '').strip(),
+                "zone": zone_raw,
                 "distinct_customers": row.get('distinct_customers', '').strip(),
                 "customer_ids": ids
             }
             temp_list.append(entry)
             temp_group.setdefault(name_key, []).append(entry)
+            if zone_key:
+                temp_zone_map.setdefault(zone_key, []).append(entry)
             for cid in ids:
                 temp_id_map[cid] = name_key
 
-    return temp_list, temp_group, temp_id_map
+    return temp_list, temp_group, temp_id_map, temp_zone_map
 
 
 def fetch_and_parse_all():
     """
     Fetch both CSVs and build in-memory indexes.
     """
-    phone_list, phone_group, phone_id_map = [], {}, {}
-    name_list, name_group, name_id_map = [], {}, {}
+    phone_list, phone_group, phone_id_map, phone_zone_map = [], {}, {}, {}
+    name_list, name_group, name_id_map, name_zone_map = [], {}, {}, {}
 
     # Phone CSV
     try:
-        phone_list, phone_group, phone_id_map = fetch_and_parse_csv(CSV_URL_PHONE, mode="phone")
+        phone_list, phone_group, phone_id_map, phone_zone_map = fetch_and_parse_csv(CSV_URL_PHONE, mode="phone")
     except Exception as e:
         print(f"Error fetching phone CSV: {e}")
 
     # Name CSV
     try:
-        name_list, name_group, name_id_map = fetch_and_parse_csv(CSV_URL_NAME, mode="name")
+        name_list, name_group, name_id_map, name_zone_map = fetch_and_parse_csv(CSV_URL_NAME, mode="name")
     except Exception as e:
         print(f"Error fetching name CSV: {e}")
 
@@ -163,6 +183,8 @@ def fetch_and_parse_all():
         phone_entries.update(phone_group)
         customer_id_to_phone.clear()
         customer_id_to_phone.update(phone_id_map)
+        zone_entries_phone.clear()
+        zone_entries_phone.update(phone_zone_map)
 
         fraud_list_name.clear()
         fraud_list_name.extend(name_list)
@@ -170,8 +192,10 @@ def fetch_and_parse_all():
         name_entries.update(name_group)
         customer_id_to_name.clear()
         customer_id_to_name.update(name_id_map)
+        zone_entries_name.clear()
+        zone_entries_name.update(name_zone_map)
 
-    print(f"Loaded phone rows={len(phone_list)} phone_keys={len(phone_group)} | name rows={len(name_list)} name_keys={len(name_group)}")
+    print(f"Loaded phone rows={len(phone_list)} phone_keys={len(phone_group)} phone_zones={len(phone_zone_map)} | name rows={len(name_list)} name_keys={len(name_group)} name_zones={len(name_zone_map)}")
 
 
 def sync_csv_background():
@@ -282,6 +306,28 @@ TEMPLATE = """<!DOCTYPE html>
             margin-bottom: 0px;
             text-align: center;
         }
+        .contact-display {
+            margin: 20px auto 10px auto;
+            text-align: center;
+            max-width: 600px;
+        }
+        .contact-label {
+            font-size: 1.0em;
+            color: #6b7280;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .contact-value {
+            font-size: 1.35em;
+            color: #1e2f4d;
+            font-weight: 700;
+            background: rgba(255,255,255,0.7);
+            border-radius: 10px;
+            padding: 10px 20px;
+            display: inline-block;
+            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15);
+            border: 1.5px solid rgba(37, 99, 235, 0.2);
+        }
         .status-bar {
             margin: 26px auto 0 auto;
             font-size: 1.18em;
@@ -330,6 +376,7 @@ TEMPLATE = """<!DOCTYPE html>
         table.results-table td:not(:last-child) { border-right: 1.2px solid #e2eaf6; }
         .loc-num { font-weight: 700; color: #2563eb; margin-right: 7px; }
         .loc-data { font-size: 1.11em; color: #2b3245; }
+        .contact-info { font-size: 1.15em; color: #1e2f4d; font-weight: 600; }
         .custid-val { font-size: 1.23em; color: #1a2c42; font-weight: 700; padding-left: 0px; }
         .idlist-row { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; align-items: flex-start; }
         .customer-id {
@@ -367,7 +414,7 @@ TEMPLATE = """<!DOCTYPE html>
             <div class="title">Fraud Customer Checker</div>
             <div class="search-bar-wrap">
                 <form method="post" class="search-form" autocomplete="off" action="/search">
-                    <input type="text" name="query" id="query" placeholder="Phone Number, Customer ID or Customer Name" required value="{{ search_value|default('') }}">
+                    <input type="text" name="query" id="query" placeholder="Phone Number, Customer ID, Customer Name or Zone" required value="{{ search_value|default('') }}">
                     <button type="submit">Search</button>
                 </form>
                 {% if search_value %}
@@ -376,6 +423,12 @@ TEMPLATE = """<!DOCTYPE html>
             </div>
 
             {% if result %}
+                {% if result.status == 'fraud' and result.contact_info %}
+                    <div class="contact-display">
+                        <div class="contact-label">Contact Number/Name:</div>
+                        <div class="contact-value">{{ result.contact_info }}</div>
+                    </div>
+                {% endif %}
                 <div class="status-bar {% if result.status == 'fraud' %}fraud-status{% else %}genuine-status{% endif %}">
                     {% if result.status == 'fraud' %}
                         Status: Fraud Customer
@@ -440,6 +493,8 @@ def get_query_result(query):
     2) Try as customer_id in customer_id_to_phone
     3) Try as exact name (normalized) in name_entries
     4) Try as customer_id in customer_id_to_name
+    5) Try as zone (normalized) in zone_entries_phone
+    6) Try as zone (normalized) in zone_entries_name
     """
     q = query.strip()
     search_display = q
@@ -447,12 +502,14 @@ def get_query_result(query):
 
     norm_phone = normalize_phone(q)
     norm_name = normalize_name(q)
+    norm_zone = normalize_zone(q)
 
     with data_lock:
         # 1. phone direct match
         if norm_phone and norm_phone in phone_entries:
             entries = phone_entries[norm_phone]
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -461,11 +518,15 @@ def get_query_result(query):
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
                 })
+                contact = e.get("phone_raw", "")
+                if contact:
+                    contacts.add(contact)
             # format display phone (add leading 0 for 10-digit keys)
             display_phone = q
             if len(norm_phone) == 10:
                 display_phone = '0' + norm_phone
-            result = {"status": "fraud", "locations": locations, "match_type": "phone (phone CSV)", "phone": display_phone}
+            contact_info = ", ".join(sorted(contacts)) if contacts else display_phone
+            result = {"status": "fraud", "locations": locations, "match_type": "phone (phone CSV)", "phone": display_phone, "contact_info": contact_info}
             search_display = display_phone
             return result, search_display
 
@@ -474,6 +535,7 @@ def get_query_result(query):
             phone_key = customer_id_to_phone[q]
             entries = phone_entries.get(phone_key, [])
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -482,10 +544,14 @@ def get_query_result(query):
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
                 })
+                contact = e.get("phone_raw", "")
+                if contact:
+                    contacts.add(contact)
             display_phone = phone_key
             if len(phone_key) == 10:
                 display_phone = '0' + phone_key
-            result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> phone (phone CSV)", "phone": display_phone}
+            contact_info = ", ".join(sorted(contacts)) if contacts else display_phone
+            result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> phone (phone CSV)", "phone": display_phone, "contact_info": contact_info}
             search_display = q
             return result, search_display
 
@@ -493,6 +559,7 @@ def get_query_result(query):
         if norm_name and norm_name in name_entries:
             entries = name_entries[norm_name]
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -501,8 +568,13 @@ def get_query_result(query):
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
                 })
-            result = {"status": "fraud", "locations": locations, "match_type": "name (name CSV)", "name": entries[0].get("name_raw", q)}
-            search_display = entries[0].get("name_raw", q)
+                contact = e.get("name_raw", "")
+                if contact:
+                    contacts.add(contact)
+            display_name = entries[0].get("name_raw", q)
+            contact_info = ", ".join(sorted(contacts)) if contacts else display_name
+            result = {"status": "fraud", "locations": locations, "match_type": "name (name CSV)", "name": display_name, "contact_info": contact_info}
+            search_display = display_name
             return result, search_display
 
         # 4. customer id -> name
@@ -510,6 +582,7 @@ def get_query_result(query):
             name_key = customer_id_to_name[q]
             entries = name_entries.get(name_key, [])
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -518,9 +591,57 @@ def get_query_result(query):
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
                 })
+                contact = e.get("name_raw", "")
+                if contact:
+                    contacts.add(contact)
             display_name = entries[0].get("name_raw", q) if entries else q
-            result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> name (name CSV)", "name": display_name}
+            contact_info = ", ".join(sorted(contacts)) if contacts else display_name
+            result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> name (name CSV)", "name": display_name, "contact_info": contact_info}
             search_display = display_name
+            return result, search_display
+
+        # 5. zone match in phone CSV
+        if norm_zone and norm_zone in zone_entries_phone:
+            entries = zone_entries_phone[norm_zone]
+            locations = []
+            contacts = set()
+            for e in entries:
+                locations.append({
+                    "state": e["state"],
+                    "city": e["city"],
+                    "zone": e["zone"],
+                    "distinct_customers": e["distinct_customers"],
+                    "customer_ids": e["customer_ids"],
+                })
+                contact = e.get("phone_raw", "")
+                if contact:
+                    contacts.add(contact)
+            zone_name = entries[0].get("zone", q)
+            contact_info = ", ".join(sorted(contacts)) if contacts else ""
+            result = {"status": "fraud", "locations": locations, "match_type": "zone (phone CSV)", "zone": zone_name, "contact_info": contact_info}
+            search_display = zone_name
+            return result, search_display
+
+        # 6. zone match in name CSV
+        if norm_zone and norm_zone in zone_entries_name:
+            entries = zone_entries_name[norm_zone]
+            locations = []
+            contacts = set()
+            for e in entries:
+                locations.append({
+                    "state": e["state"],
+                    "city": e["city"],
+                    "zone": e["zone"],
+                    "distinct_customers": e["distinct_customers"],
+                    "customer_ids": e["customer_ids"],
+                })
+                contact = e.get("name_raw", "")
+                if contact:
+                    contacts.add(contact)
+            zone_name = entries[0].get("zone", q)
+            contact_info = ", ".join(sorted(contacts)) if contacts else ""
+            result = {"status": "fraud", "locations": locations, "match_type": "zone (name CSV)", "zone": zone_name, "contact_info": contact_info}
+            search_display = zone_name
             return result, search_display
 
     # not found

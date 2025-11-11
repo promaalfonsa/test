@@ -354,6 +354,7 @@ TEMPLATE = """<!DOCTYPE html>
         table.results-table td:not(:last-child) { border-right: 1.2px solid #e2eaf6; }
         .loc-num { font-weight: 700; color: #2563eb; margin-right: 7px; }
         .loc-data { font-size: 1.11em; color: #2b3245; }
+        .contact-info { font-size: 1.15em; color: #1e2f4d; font-weight: 600; }
         .custid-val { font-size: 1.23em; color: #1a2c42; font-weight: 700; padding-left: 0px; }
         .idlist-row { display: flex; flex-wrap: wrap; gap: 9px; justify-content: center; align-items: flex-start; }
         .customer-id {
@@ -417,14 +418,18 @@ TEMPLATE = """<!DOCTYPE html>
                 <table class="results-table">
                     <thead>
                         <tr>
-                            <th style="width:30%; text-align:center;">Location</th>
-                            <th style="width:14%; text-align:center;">Distinct Customer ID</th>
+                            <th style="width:18%; text-align:center;">Contact Number/Name</th>
+                            <th style="width:28%; text-align:center;">Location</th>
+                            <th style="width:12%; text-align:center;">Distinct Customer ID</th>
                             <th style="text-align:center;">Customer ID List</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for loc in result.locations %}
                         <tr class="{% if loop.index % 2 == 0 %}even{% endif %}">
+                            <td>
+                                <span class="contact-info">{{ loc.contact }}</span>
+                            </td>
                             <td>
                                 <span class="loc-num">{{ loop.index }}.</span>
                                 <span class="loc-data">{{ loc.state }}, {{ loc.city }}, {{ loc.zone }}</span>
@@ -487,6 +492,7 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
+                    "contact": e.get("phone_raw", ""),
                 })
             # format display phone (add leading 0 for 10-digit keys)
             display_phone = q
@@ -508,6 +514,7 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
+                    "contact": e.get("phone_raw", ""),
                 })
             display_phone = phone_key
             if len(phone_key) == 10:
@@ -527,6 +534,7 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
+                    "contact": e.get("name_raw", ""),
                 })
             result = {"status": "fraud", "locations": locations, "match_type": "name (name CSV)", "name": entries[0].get("name_raw", q)}
             search_display = entries[0].get("name_raw", q)
@@ -544,6 +552,7 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
+                    "contact": e.get("name_raw", ""),
                 })
             display_name = entries[0].get("name_raw", q) if entries else q
             result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> name (name CSV)", "name": display_name}
@@ -561,6 +570,7 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
+                    "contact": e.get("phone_raw", ""),
                 })
             result = {"status": "fraud", "locations": locations, "match_type": "zone (phone CSV)", "zone": entries[0].get("zone", q)}
             search_display = entries[0].get("zone", q)
@@ -577,6 +587,7 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
+                    "contact": e.get("name_raw", ""),
                 })
             result = {"status": "fraud", "locations": locations, "match_type": "zone (name CSV)", "zone": entries[0].get("zone", q)}
             search_display = entries[0].get("zone", q)

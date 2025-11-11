@@ -306,6 +306,28 @@ TEMPLATE = """<!DOCTYPE html>
             margin-bottom: 0px;
             text-align: center;
         }
+        .contact-display {
+            margin: 20px auto 10px auto;
+            text-align: center;
+            max-width: 600px;
+        }
+        .contact-label {
+            font-size: 1.0em;
+            color: #6b7280;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+        .contact-value {
+            font-size: 1.35em;
+            color: #1e2f4d;
+            font-weight: 700;
+            background: rgba(255,255,255,0.7);
+            border-radius: 10px;
+            padding: 10px 20px;
+            display: inline-block;
+            box-shadow: 0 2px 8px rgba(37, 99, 235, 0.15);
+            border: 1.5px solid rgba(37, 99, 235, 0.2);
+        }
         .status-bar {
             margin: 26px auto 0 auto;
             font-size: 1.18em;
@@ -401,6 +423,12 @@ TEMPLATE = """<!DOCTYPE html>
             </div>
 
             {% if result %}
+                {% if result.status == 'fraud' and result.contact_info %}
+                    <div class="contact-display">
+                        <div class="contact-label">Contact Number/Name:</div>
+                        <div class="contact-value">{{ result.contact_info }}</div>
+                    </div>
+                {% endif %}
                 <div class="status-bar {% if result.status == 'fraud' %}fraud-status{% else %}genuine-status{% endif %}">
                     {% if result.status == 'fraud' %}
                         Status: Fraud Customer
@@ -418,18 +446,14 @@ TEMPLATE = """<!DOCTYPE html>
                 <table class="results-table">
                     <thead>
                         <tr>
-                            <th style="width:18%; text-align:center;">Contact Number/Name</th>
-                            <th style="width:28%; text-align:center;">Location</th>
-                            <th style="width:12%; text-align:center;">Distinct Customer ID</th>
+                            <th style="width:30%; text-align:center;">Location</th>
+                            <th style="width:14%; text-align:center;">Distinct Customer ID</th>
                             <th style="text-align:center;">Customer ID List</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for loc in result.locations %}
                         <tr class="{% if loop.index % 2 == 0 %}even{% endif %}">
-                            <td>
-                                <span class="contact-info">{{ loc.contact }}</span>
-                            </td>
                             <td>
                                 <span class="loc-num">{{ loop.index }}.</span>
                                 <span class="loc-data">{{ loc.state }}, {{ loc.city }}, {{ loc.zone }}</span>
@@ -485,6 +509,7 @@ def get_query_result(query):
         if norm_phone and norm_phone in phone_entries:
             entries = phone_entries[norm_phone]
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -492,13 +517,16 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
-                    "contact": e.get("phone_raw", ""),
                 })
+                contact = e.get("phone_raw", "")
+                if contact:
+                    contacts.add(contact)
             # format display phone (add leading 0 for 10-digit keys)
             display_phone = q
             if len(norm_phone) == 10:
                 display_phone = '0' + norm_phone
-            result = {"status": "fraud", "locations": locations, "match_type": "phone (phone CSV)", "phone": display_phone}
+            contact_info = ", ".join(sorted(contacts)) if contacts else display_phone
+            result = {"status": "fraud", "locations": locations, "match_type": "phone (phone CSV)", "phone": display_phone, "contact_info": contact_info}
             search_display = display_phone
             return result, search_display
 
@@ -507,6 +535,7 @@ def get_query_result(query):
             phone_key = customer_id_to_phone[q]
             entries = phone_entries.get(phone_key, [])
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -514,12 +543,15 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
-                    "contact": e.get("phone_raw", ""),
                 })
+                contact = e.get("phone_raw", "")
+                if contact:
+                    contacts.add(contact)
             display_phone = phone_key
             if len(phone_key) == 10:
                 display_phone = '0' + phone_key
-            result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> phone (phone CSV)", "phone": display_phone}
+            contact_info = ", ".join(sorted(contacts)) if contacts else display_phone
+            result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> phone (phone CSV)", "phone": display_phone, "contact_info": contact_info}
             search_display = q
             return result, search_display
 
@@ -527,6 +559,7 @@ def get_query_result(query):
         if norm_name and norm_name in name_entries:
             entries = name_entries[norm_name]
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -534,10 +567,14 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
-                    "contact": e.get("name_raw", ""),
                 })
-            result = {"status": "fraud", "locations": locations, "match_type": "name (name CSV)", "name": entries[0].get("name_raw", q)}
-            search_display = entries[0].get("name_raw", q)
+                contact = e.get("name_raw", "")
+                if contact:
+                    contacts.add(contact)
+            display_name = entries[0].get("name_raw", q)
+            contact_info = ", ".join(sorted(contacts)) if contacts else display_name
+            result = {"status": "fraud", "locations": locations, "match_type": "name (name CSV)", "name": display_name, "contact_info": contact_info}
+            search_display = display_name
             return result, search_display
 
         # 4. customer id -> name
@@ -545,6 +582,7 @@ def get_query_result(query):
             name_key = customer_id_to_name[q]
             entries = name_entries.get(name_key, [])
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -552,10 +590,13 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
-                    "contact": e.get("name_raw", ""),
                 })
+                contact = e.get("name_raw", "")
+                if contact:
+                    contacts.add(contact)
             display_name = entries[0].get("name_raw", q) if entries else q
-            result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> name (name CSV)", "name": display_name}
+            contact_info = ", ".join(sorted(contacts)) if contacts else display_name
+            result = {"status": "fraud", "locations": locations, "match_type": "customer_id -> name (name CSV)", "name": display_name, "contact_info": contact_info}
             search_display = display_name
             return result, search_display
 
@@ -563,6 +604,7 @@ def get_query_result(query):
         if norm_zone and norm_zone in zone_entries_phone:
             entries = zone_entries_phone[norm_zone]
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -570,16 +612,21 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
-                    "contact": e.get("phone_raw", ""),
                 })
-            result = {"status": "fraud", "locations": locations, "match_type": "zone (phone CSV)", "zone": entries[0].get("zone", q)}
-            search_display = entries[0].get("zone", q)
+                contact = e.get("phone_raw", "")
+                if contact:
+                    contacts.add(contact)
+            zone_name = entries[0].get("zone", q)
+            contact_info = ", ".join(sorted(contacts)) if contacts else ""
+            result = {"status": "fraud", "locations": locations, "match_type": "zone (phone CSV)", "zone": zone_name, "contact_info": contact_info}
+            search_display = zone_name
             return result, search_display
 
         # 6. zone match in name CSV
         if norm_zone and norm_zone in zone_entries_name:
             entries = zone_entries_name[norm_zone]
             locations = []
+            contacts = set()
             for e in entries:
                 locations.append({
                     "state": e["state"],
@@ -587,10 +634,14 @@ def get_query_result(query):
                     "zone": e["zone"],
                     "distinct_customers": e["distinct_customers"],
                     "customer_ids": e["customer_ids"],
-                    "contact": e.get("name_raw", ""),
                 })
-            result = {"status": "fraud", "locations": locations, "match_type": "zone (name CSV)", "zone": entries[0].get("zone", q)}
-            search_display = entries[0].get("zone", q)
+                contact = e.get("name_raw", "")
+                if contact:
+                    contacts.add(contact)
+            zone_name = entries[0].get("zone", q)
+            contact_info = ", ".join(sorted(contacts)) if contacts else ""
+            result = {"status": "fraud", "locations": locations, "match_type": "zone (name CSV)", "zone": zone_name, "contact_info": contact_info}
+            search_display = zone_name
             return result, search_display
 
     # not found
